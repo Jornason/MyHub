@@ -1,0 +1,24 @@
+Find the model's center of gravity -> g
+Project g onto plane where y=lowest slice.y -> g'
+while(g' not contained in lowest slice)
+{
+    find vertex on lowest slice closest to g' -> v1
+    find ray between v1 and g' -> ray1
+    find perpendicular line to ray1 through v1 -> perp1
+    For(all vertices in the model)
+    {
+        v2 = a vertex in the model
+        if(v2 is on the same side of perp1 as g')
+        {
+            compute ray2 where ray2 is perpendicular with perp1 and ray2 pass through v2 and
+              perp1
+            compuate angle1 = angle between ray2 and ray1
+            if this angle is smaller than the angle found for any other vertex, record this angle
+              as AngleMin and save v2
+        }
+    }
+    Rotate the entire model on the axis perp1 by angle AngleMin
+    Recalculate the slices
+    recalculate center of gravity -> g
+    g' = g projected onto the lowest slice
+}

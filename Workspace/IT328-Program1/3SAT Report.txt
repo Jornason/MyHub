@@ -1,0 +1,88 @@
+//Program 1
+//IT328 Spring 2014
+//3SAT ≤P Clique, Independent Sets ≤P Clique
+//Thomas Lyons
+//Ben Murray
+//Unix account: telyons
+//Unix password: ifthen88
+
+Compile with:
+javac *.java
+
+Run with:
+java Convert3SAT cnfs.txt
+
+and then
+
+java MaxCliqueAndMaxIndependentSet
+
+The output from Convert3SAT is placed in graphscustom.txt
+
+MaxCliqueAndMaxIndependentSet reads this AND graphs.txt AND graphsDense.txt
+
+graphs.txt and graphsDense.txt will complete extremely quickly.
+graphhscustom.txt will take a very long time. Output is updated as a graph
+completes.
+
+The conversion of 3CNF to an adjacency matrix for a clique problem is done by
+first opening the input file (by passing it as a command line argument) and
+reading through it line by line. Each line is tokenized and has the 3CNF split
+split from the number of variables for the 3SAT into an array. An array of
+variables is set up for comparisons later. THe adjacency matrix is then
+initialized to be large enough for each variable and it's negation to be
+compared.
+
+Each cell is checked for adjacency between the column and row variable.
+Reflexive position are automatically marked as adjacent and negations are
+automatically marked as non-adjacent. All other cells examine the 3CNF for the
+row variable. If it exists in the 3CNF it then checks the rest of the 3CNF for
+column variable, skipping the clause in which the row variable was found. If it
+exists, the cell is marked as an adjacency, otherwise it is left marked
+non-adjacent. Only half the cells in the adjacency matrix are examined since the
+edges aren't directed. WHen one cells is marked as either adjacent or
+non-adjacent, its pair is also marked.
+
+After filling the entire adjacency matrix, it is printed out to a file and the
+next line from the input file is read. Once a line holding only "0" is read in
+the program terminates and writes the file to the disk.
+
+The clique algorithm begins by initializing a candidates arraylist and a clique 
+arraylist. The candidates arraylist is the list of vertices that may potentially
+be added to the clique, but haven't been verified yet. The clique arraylist
+contains a clique that is currently being tested for validity. After every
+vertex has been added to the candidate clique, the algorithm begins. In the grow
+method, each candidate in the list of candidates is tested. If the clique size
+combined with the candidate size is less than the maximum size of the cliques
+found so far, then that means we can't possibly improve on what we have, so we
+quit. Otherwise, we pull a vertex from the candidates and add it to the clique.
+We then find the new list of candidates to pass on to the next call of the grow
+method. We compare each vertex in the candidates list. If the vertex we just 
+added to the clique connects with the candidate, add it to the new list of
+candidates. At the end of this, if no new suitable candidates were found and the
+clique is bigger than it was before, save the solution. If there are candidates
+to test, recursively call the grow list. Otherwise, remove the vertex from the
+clique and the candidate list. It will not be in the maximum clique.
+
+The independent set can be found very easily by simply taking the graph that was
+read into the max clique algorithm and flipping all of the bits. Then you feed
+it into the same max clique algorithm.
+
+It should be noted that in the max clique algorithm, variables are never allowed
+to connect to themselves. This will result in infinite recursion. Before a graph
+is read into the max clique algorithm, all reflexive edges must be deleted.
+
+The max clique result can be found extremely quickly for small, non-dense
+graphs. However, as the number of edges increases, so to does the run time.
+
+Independent sets, on the other hand are trivial to find and finish faster than
+you can blink your eyes.
+
+Thomas has a titanic monolith super-computer currently processing the
+adjacency matrices resulting from the CNF file. The first 13 graphs finished in
+less than a second for the max clique problem. The next 5 graphs finished in
+less than 5 minutes. Graph 19 took a little less than 19 minutes to complete.
+Graph 20 took a little less than 5 minutes to complete. Graph 21 took a little
+over 3 hours and 13 minutes to complete. Graph 22 took 15 hours and 20 minutes
+to complete. Graph 23 took about 8 hours and 17 minutes to complete. Graph 24
+(the final graph) began at approximately 11:30pm on March 6 and at time of
+writing (4am on March 7th) has not yet completed.

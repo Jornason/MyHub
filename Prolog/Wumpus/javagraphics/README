@@ -1,0 +1,19 @@
+To run the graphical wumpus, make sure you have everything from the
+javagraphics folder and that you are logged in on discovery (that's the only
+host that will work).
+
+Step 1: Export java library path
+export LD_LIBRARY_PATH=/usr/local/java/jdk1.6.0_24/jre/lib/i386:/usr/local/java/jdk1.6.0_24/jre/lib/i386/client
+
+Step 2: Run Prolog
+   consult(swi_wumpus).
+   
+Step 3: Execute the statment: 
+   start_gui.
+
+After you're in, you will have a place to specify the relative path to your
+agent file and the number of trials.  Then click on the cave tab to watch.
+
+Note that this is imperfect code from a student project and does sometimes
+crash.
+  
