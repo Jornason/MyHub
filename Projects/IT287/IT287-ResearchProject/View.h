@@ -5,7 +5,7 @@
 #include<string>
 #include<stack>
 #include<glm/glm.hpp>
-#include"mesh.h"
+#include"object.h"
 using namespace std;
 class View
 {
@@ -26,7 +26,7 @@ class View
     void getOpenGLVersion(int* major, int* minor);
     void getGLSLVersion(int* major, int* minor);
   public:
-    vector<Mesh*>meshList;
+    vector<Object*>objList;
     string filename;
     string name;
   protected:

@@ -1,4 +1,5 @@
 #include"View.h"
+#include"mesh.h"
 #include<GL/glew.h>
 #include<cstdlib>
 #include<fstream>
@@ -15,11 +16,11 @@ View::View()
 
 View::~View()
 {
-  for (unsigned int i = 0; i < meshList.size(); i++)
+  for (unsigned int i = 0; i < objList.size(); i++)
   {
-    delete meshList[i];
+    delete objList[i];
   }
-  meshList.clear();
+  objList.clear();
 }
 
 void View::resize(int w, int h)
@@ -31,11 +32,11 @@ void View::resize(int w, int h)
 
 void View::initialize()
 {
-  for (unsigned int i = 0; i < meshList.size(); i++)
+  for (unsigned int i = 0; i < objList.size(); i++)
   {
-    delete meshList[i];
+    delete objList[i];
   }
-  meshList.clear();
+  objList.clear();
   ShaderInfo shaders[] =
   {
     {GL_VERTEX_SHADER, "trianglesV2.vert"},
@@ -47,9 +48,9 @@ void View::initialize()
   projLoc = glGetUniformLocation(program, "projection");
   mvLoc = glGetUniformLocation(program, "modelview");
   objColLoc = glGetAttribLocation(program, "vColor");
-  Mesh* model = new Mesh(name, filename);
+  Mesh* model = new Mesh(filename);
   model->setTransform(glm::mat4(1.0));
-  meshList.push_back(model);
+  objList.push_back(model);
 }
 
 void View::draw(float Xangle, float Yangle, double tolerance, double scale)
@@ -58,18 +59,18 @@ void View::draw(float Xangle, float Yangle, double tolerance, double scale)
   glm::vec3 pov = glm::vec3(0, 0, 75);
   modelview = glm::lookAt(pov, glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
   glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(proj));
-  for (unsigned int i = 0; i < meshList.size(); i++)
+  for (unsigned int i = 0; i < objList.size(); i++)
   {
     glm::mat4 id = glm::mat4(1.0);
-    glm::mat4 transform = meshList[i]->getTransform();
+    glm::mat4 transform = objList[i]->getTransform();
     transform = glm::rotate(id, Yangle, glm::vec3(1, 0, 0)) * transform;
     transform = glm::rotate(id, Xangle, glm::vec3(0, 1, 0)) * transform;
     transform = glm::scale(id, glm::vec3(scale, scale, scale)) * transform;
-    meshList[i]->clearTransform();
-    meshList[i]->setTransform(transform);
-    glm::mat4 objTransf = modelview * meshList[i]->getTransform();
+    objList[i]->clearTransform();
+    objList[i]->setTransform(transform);
+    glm::mat4 objTransf = modelview * objList[i]->getTransform();
     glUniformMatrix4fv(mvLoc, 1, GL_FALSE, glm::value_ptr(objTransf));
-    meshList[i]->draw(objColLoc, tolerance);
+    objList[i]->draw(objColLoc, tolerance);
   }
   glFinish();
 }

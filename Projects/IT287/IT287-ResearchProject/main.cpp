@@ -6,6 +6,19 @@
 #include"mesh.h"
 using namespace std;
 
+//Compute the stability of a 3D printable model and split as necessary to ensure
+//a clean print
+
+//The constructor for the mesh reads in a .obj file and computes the stability
+//of the model given a material tolerance provided by the user. If a model has
+//unstable parts, they are split into a new model and the process repeats.
+
+//Initially, tolerance is set to 1.0. It can be increased or decreased with the
+//up and down arrow keys. The model will reorient itself as this value changes
+//to display the model with the most supported vertices given the tolerance.
+
+//The model can also be rotated and the user can zoom in and out
+
 void init();
 void display();
 void resize(int w, int h);
@@ -16,7 +29,7 @@ void keyboardSpecial(int key, int x, int y);
 float deltaXAngle = 0.0, deltaYAngle = 0.0;
 bool isDragging = 0;
 int prevX = 0, prevY = 0;
-double tolerance = 0.0;
+double tolerance = 1.0;
 double scale = 1.0;
 View v;
 
@@ -49,6 +62,7 @@ void display()
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
+  //v.initialize(tolerance);
   v.draw(deltaXAngle, deltaYAngle, tolerance, scale);
   glutSwapBuffers();
 }
@@ -68,8 +82,7 @@ void init()
   v.getGLSLVersion(&mj, &mn);
   cout << "GLSL version supported: " << mj << "." << mn << endl;
   glClearColor(0, 0, 0, 1);
-  v.name = "teddybear";
-  v.filename = "a10.obj";
+  v.filename = "teddybear.obj";
   v.initialize();
 }
 

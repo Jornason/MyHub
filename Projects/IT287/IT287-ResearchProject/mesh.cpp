@@ -1,26 +1,28 @@
 #include"mesh.h"
 #include<fstream>
 #include<iostream>
-#include<vector>
-#include<string>
 #include<sstream>
 #include<queue>
 #include<algorithm>
 #include<thread>
+#include <chrono>
 using namespace std;
 
-Mesh::Mesh(string name, string filename)
+Mesh::Mesh(string filename) : Object()
 {
-  glGenVertexArrays(1, &VAO);
-  glBindVertexArray(VAO);
-  glGenBuffers(NumBuffers, buffers);
-  setName(name);
-  //1. Read in an obj mesh file
-  //2. Compute and transform it to the "best orientation" for the process
-  //3. Cut the model into thin slices on the X-Z plane
-  //4. Determine how stable every part of the model is
-  //5. Adjust the stability model to consider the slices below each part
-  //6. Print to a text file for debugging
+  //Mesh constructor
+  //1. Read in an obj file and store the vertex coordinates in vertexData and
+  //   the triangle face data in triangleIndices
+  //2. Compute the Principle Component Analysis to find the 3 Eigen vectors
+  //3. Find the four potential best orientations for the model by
+  //   a. Rotating the model the the orientation
+  //   b. Creating a graph of the model
+  //   c. Creating cross sections of the model in this orientation
+  //   d. Computing the stabilty of each point on its own
+  //   e. Adjusting the stability to consider the points below it
+  //4. Of the four orientations, find the one that had the best average stabilty
+  //   across all of the points
+
   if (readInputMesh(filename))
   {
     cout << "mesh read" << endl;
@@ -29,25 +31,45 @@ Mesh::Mesh(string name, string filename)
   {
     cout << "mesh file read failed" << endl;
   }
-  computeBestOrientation();
-  createGraph();
-  cutTheModelIntoSlices();
-  cout << "cut into slices" << endl;
-  computeStabilityModel();
-  cout << "computed stability" << endl;
-  adjustStability();
-  cout << "adjusted stability" << endl;
-  printSlices();
+  int orientation;
+  cout<<"Computing Principle Component Analysis"<<endl;
+  computePrincipalComponentAnalysis();
+  for (orientation = 0; orientation < 4; orientation++)
+  {
+    cout<<"Applying rotation of all model vertices for orientation "
+          <<orientation+1<<" out of 4"<<endl;
+    rotateModel(orientation);
+    cout<<"Assembling graph for orientation "<<orientation+1<<" out of 4"<<endl;
+    createGraph();
+    cout<<"Cutting model into slices for orientation "<<orientation+1
+       <<" out of 4"<<endl;
+    cutTheModelIntoSlices();
+    cout<<"Computing the raw stability model for orientation "<<orientation+1
+          <<" out of 4"<<endl;
+    computeStabilityModel();
+    cout<<"Adjusting the raw stability model for orientation "<<orientation+1
+          <<" out of 4"<<endl;
+    adjustStability();
+  }
 }
 
-bool Mesh::readInputMesh(string& filenm)
+bool Mesh::readInputMesh(string& filename)
 {
+  //Read in an obj file to store the model
+  //1. Clear any previous model data
+  //2. Open the obj file as an input stream
+  //3. Get each line of the file
+  //   a. If the first character on the line is f, then the line represents a
+  //      triangle face. Store the next 3 numbers in the triangle indices vector
+  //   b. If the first character on the line is v, then the line represents a
+  //      set of vertex coordinates. Store the vertex coordinates in vertexData
+  //   c. Otherwise, ignore the line
+  //4. Close the file
+
   string line;
-  const char* file = filenm.c_str();
-  //Reset the stored vertex data and triangle mapping
+  const char* file = filename.c_str();
   vertexData.clear();
   triangleIndices.clear();
-  //Open the file
   ifstream ifile(file);
   if (!ifile.is_open())
   {
@@ -58,7 +80,6 @@ bool Mesh::readInputMesh(string& filenm)
   {
     stringstream linestr;
     string code;
-    //Get the first token from each line
     linestr << line;
     linestr >> code;
     if (code == "f")
@@ -68,7 +89,6 @@ bool Mesh::readInputMesh(string& filenm)
       //Consider alternative format for obj file
       if (line.find("//") != string::npos)
       {
-        //Get the three vertices that make up this triangle
         linestr >> a;
         linestr.ignore(100, ' ');
         a--;
@@ -83,7 +103,6 @@ bool Mesh::readInputMesh(string& filenm)
       }
       else
       {
-        //Get the three vertices that make up this triangle
         linestr >> a;
         a--;
         triangleIndices.push_back(a);
@@ -98,7 +117,7 @@ bool Mesh::readInputMesh(string& filenm)
     else if (code == "v")
     {
       //Vertex
-      VAttrs v;
+      VertexAttributes v;
       linestr >> v.x;
       linestr >> v.y;
       linestr >> v.z;
@@ -115,22 +134,33 @@ bool Mesh::readInputMesh(string& filenm)
   return true;
 }
 
-void Mesh::computeBestOrientation()
+void Mesh::computePrincipalComponentAnalysis()
 {
+  //Computer the PCA of the model
+  //1. Find the centroid of the model by computing the average x, y, and z
+  //   values of all of the vertices in the model
+  //2. Initialize a 3D matrix to 0 for all values
+  //3. Compute each value in the matrix
+  //   Each value is the sum across all vertice of the square of the distance
+  //   along the respective axis that the point is from the respective axis
+  //   average deivided by the number of vertices
+  //4. Use a self adjoint eigen solver (part of the eigen library) to compute
+  //   the 3 eigen vectors based on this matrix of sums
+  //5. Arrange the eigen vectors by size
+
   unsigned int i, j;
-  //Find the centroid of the model (the average of all of the vertices)
-  avgX = 0.0;
-  avgY = 0.0;
-  avgZ = 0.0;
+  averageXValueInModel = 0.0;
+  averageYValueInModel = 0.0;
+  averageZValueInModel = 0.0;
   for (i = 0; i < vertexData.size(); i++)
   {
-    avgX += vertexData[i].x;
-    avgY += vertexData[i].y;
-    avgZ += vertexData[i].z;
+    averageXValueInModel += vertexData[i].x;
+    averageYValueInModel += vertexData[i].y;
+    averageZValueInModel += vertexData[i].z;
   }
-  avgX /= vertexData.size();
-  avgY /= vertexData.size();
-  avgZ /= vertexData.size();
+  averageXValueInModel /= vertexData.size();
+  averageYValueInModel /= vertexData.size();
+  averageZValueInModel /= vertexData.size();
   Matrix3d mat;
   for (i = 0; i < 3; i++)
   {
@@ -140,29 +170,46 @@ void Mesh::computeBestOrientation()
     }
   }
   double a;
+
+  //Sum across all vertices
   for (i = 0; i < vertexData.size(); i++)
   {
-    a = (vertexData[i].x - avgX) * (vertexData[i].x - avgX) / vertexData.size();
+    //(VertexAxisComponentValue - AverageAxisComponentValue)^2
+    //--------------------------------------------------------
+    //              number of vertices in model
+
+    a = (vertexData[i].x - averageXValueInModel) * (vertexData[i].x -
+        averageXValueInModel) / vertexData.size();
     mat(0, 0) = mat(0, 0) + a;
-    a = (vertexData[i].x - avgX) * (vertexData[i].y - avgY) / vertexData.size();
+    a = (vertexData[i].x - averageXValueInModel) * (vertexData[i].y -
+        averageYValueInModel) / vertexData.size();
     mat(0, 1) = mat(0, 1) + a;
-    a = (vertexData[i].x - avgX) * (vertexData[i].z - avgZ) / vertexData.size();
+    a = (vertexData[i].x - averageXValueInModel) * (vertexData[i].z -
+        averageZValueInModel) / vertexData.size();
     mat(0, 2) = mat(0, 2) + a;
-    a = (vertexData[i].y - avgY) * (vertexData[i].x - avgX) / vertexData.size();
+    a = (vertexData[i].y - averageYValueInModel) * (vertexData[i].x -
+        averageXValueInModel) / vertexData.size();
     mat(1, 0) = mat(1, 0) + a;
-    a = (vertexData[i].y - avgY) * (vertexData[i].y - avgY) / vertexData.size();
+    a = (vertexData[i].y - averageYValueInModel) * (vertexData[i].y -
+        averageYValueInModel) / vertexData.size();
     mat(1, 1) = mat(1, 1) + a;
-    a = (vertexData[i].y - avgY) * (vertexData[i].z - avgZ) / vertexData.size();
+    a = (vertexData[i].y - averageYValueInModel) * (vertexData[i].z -
+        averageZValueInModel) / vertexData.size();
     mat(1, 2) = mat(1, 2) + a;
-    a = (vertexData[i].z - avgZ) * (vertexData[i].x - avgX) / vertexData.size();
+    a = (vertexData[i].z - averageZValueInModel) * (vertexData[i].x -
+        averageXValueInModel) / vertexData.size();
     mat(2, 0) = mat(2, 0) + a;
-    a = (vertexData[i].z - avgZ) * (vertexData[i].y - avgY) / vertexData.size();
+    a = (vertexData[i].z - averageZValueInModel) * (vertexData[i].y -
+        averageYValueInModel) / vertexData.size();
     mat(2, 1) = mat(2, 1) + a;
-    a = (vertexData[i].z - avgZ) * (vertexData[i].z - avgZ) / vertexData.size();
+    a = (vertexData[i].z - averageZValueInModel) * (vertexData[i].z -
+        averageZValueInModel) / vertexData.size();
     mat(2, 2) = mat(2, 2) + a;
   }
   SelfAdjointEigenSolver<Matrix3d> es;
   es.compute(mat);
+
+  //Arrange the eigen vectors by size
   int largest = 0;
   int middle = 0;
   int smallest = 0;
@@ -219,17 +266,67 @@ void Mesh::computeBestOrientation()
   eigenLargest = es.eigenvectors().col(largest);
   eigenMiddle = es.eigenvectors().col(middle);
   eigenSmallest = es.eigenvectors().col(smallest);
+}
+
+void Mesh::rotateModel(int orientation)
+{
+  //Rotate the vertex data using the eigen vector data
+  //1. Computing a rotation matrix based on the selected orientation
+  //   The largest Eigen value should always be paralle to the x-z plane
+  //2. Compute a rotation matrix to rotate the model to the correct orientation
+  //3. Compute a translation matrix to move each vertex to the centroid of the
+  //   model
+  //4. Transform each point in the model using the transformation matrices
+
   glm::dmat4 rotationMatrix;
-  double rot[16] =
+  unsigned int i;
+  if (orientation == 0)
   {
-    eigenMiddle(0), eigenSmallest(0), eigenLargest(0), 0,
-    eigenMiddle(1), eigenSmallest(1), eigenLargest(1), 0,
-    eigenMiddle(2), eigenSmallest(2), eigenLargest(2), 0,
-    1,              1,                1,               1
-  };
-  rotationMatrix = glm::make_mat4(rot);
+    double rot[16] =
+    {
+      eigenMiddle(0), eigenSmallest(0), eigenLargest(0), 0,
+      eigenMiddle(1), eigenSmallest(1), eigenLargest(1), 0,
+      eigenMiddle(2), eigenSmallest(2), eigenLargest(2), 0,
+      1,              1,                1,               1
+    };
+    rotationMatrix = glm::make_mat4(rot);
+  }
+  else if (orientation == 1)
+  {
+    double rot[16] =
+    {
+      -eigenMiddle(0), -eigenSmallest(0), eigenLargest(0), 0,
+      -eigenMiddle(1), -eigenSmallest(1), eigenLargest(1), 0,
+      -eigenMiddle(2), -eigenSmallest(2), eigenLargest(2), 0,
+      1,              1,                1,               1
+    };
+    rotationMatrix = glm::make_mat4(rot);
+  }
+  else if (orientation == 2)
+  {
+    double rot[16] =
+    {
+      eigenSmallest(0), -eigenMiddle(0), eigenLargest(0), 0,
+      eigenSmallest(1), -eigenMiddle(1), eigenLargest(1), 0,
+      eigenSmallest(2), -eigenMiddle(2), eigenLargest(2), 0,
+      1,              1,                1,               1
+    };
+    rotationMatrix = glm::make_mat4(rot);
+  }
+  else
+  {
+    double rot[16] =
+    {
+      -eigenSmallest(0), eigenMiddle(0), eigenLargest(0), 0,
+      -eigenSmallest(1), eigenMiddle(1), eigenLargest(1), 0,
+      -eigenSmallest(2), eigenMiddle(2), eigenLargest(2), 0,
+      1,              1,                1,               1
+    };
+    rotationMatrix = glm::make_mat4(rot);
+  }
   glm::dmat4 translationMatrix
-    = glm::translate(glm::dmat4(1.0), glm::dvec3(-avgX, -avgY, -avgZ));
+    = glm::translate(glm::dmat4(1.0), glm::dvec3(-averageXValueInModel,
+                     -averageYValueInModel, -averageZValueInModel));
   glm::dmat4 transform = rotationMatrix * translationMatrix;
   for (i = 0; i < vertexData.size(); i++)
   {
@@ -259,6 +356,7 @@ void Mesh::createGraph()
   //   to indices in the triangleIndices vertex. Each value points to the first
   //   of 3 vertices that make up a triangle (so each value will be a multiple
   //   of 3.
+
   for (unsigned int i = 0; i < triangleIndices.size(); i += 3)
   {
     std::map<int, std::set<int>> innerMaps[3];
@@ -290,10 +388,12 @@ void Mesh::createGraph()
   }
 }
 
-bool sortY(const VAttrs& lhs, const VAttrs& rhs)
+bool sortY(const Object::VertexAttributes& lhs,
+           const Object::VertexAttributes& rhs)
 {
   //This predicate is used as a comparator of vertices. They are compared by
   //their y value
+
   return lhs.y < rhs.y;
 }
 
@@ -314,6 +414,8 @@ void Mesh::cutTheModelIntoSlices()
   //8. Finally, increase the y value to find at what point the next slice will
   //   be created.
   //9. Return to step 5.
+
+  modelCrossSectionData.clear();
   double maximumYValue = vertexData[0].y;
   double minumumYValue = vertexData[0].y;
   unsigned int i;
@@ -333,16 +435,18 @@ void Mesh::cutTheModelIntoSlices()
   sortedVertexData = vertexData;
   //Y values sorted here
   sort(sortedVertexData.begin(), sortedVertexData.end(), sortY);
-  y = sortedVertexData[0].y;
+  currentYValue = sortedVertexData[0].y;
   i = 0;
   //Keep a clean copy of the graph
-  Graph savedGraph = graph;
+  map<int, map<int, set<int>>> savedGraph = graph;
   //There will be AT LEAST as many slices as there are UNIQUE Y VALUES in the
   //model
   while (i < sortedVertexData.size() - 1)
   {
     //Progress tracking
-    cout << ++i << " out of " << sortedVertexData.size() << endl;
+    cout<<++i << " out of " << sortedVertexData.size()-1;
+    cout<<'\r';
+    //cout << string(str.length(), '\b');
     //Create a slice
     createIndividualSlice();
     //Consume the graph
@@ -352,46 +456,61 @@ void Mesh::cutTheModelIntoSlices()
     if (i == sortedVertexData.size() - 1)
     {
       //The next y value is equal to the y value of the final vertex
-      y = sortedVertexData[i].y;
+      currentYValue = sortedVertexData[i].y;
     }
-    else if (y + maximumThicknessOfSlice <= sortedVertexData[i + 1].y)
+    else if (currentYValue + maximumThicknessOfSlice <= sortedVertexData[i + 1].y)
     {
       //Insert a filler slice
-      y += maximumThicknessOfSlice;
+      currentYValue += maximumThicknessOfSlice;
       i--;
     }
     else
     {
       //Create a slice at the y value of the next vertex
-      y = sortedVertexData[i + 1].y;
+      currentYValue = sortedVertexData[i + 1].y;
     }
   }
+  cout<<endl;
 }
 
 void Mesh::createIndividualSlice()
 {
   //Iterate through the graph that remains, looking an edge that straddles the
   //clipping plane
-  GIter mainGraphIterator = graph.begin();
+
+  map<int, map<int, set<int>>>::iterator mainGraphIterator = graph.begin();
   for (; mainGraphIterator != graph.end(); mainGraphIterator++)
   {
-    findStraddlingVertex(mainGraphIterator);
+    findStraddlingEdge(mainGraphIterator);
   }
 }
 
-void Mesh::findStraddlingVertex(GIter& mainGraphIterator)
+void Mesh::findStraddlingEdge(map<int, map<int, set<int>>>::iterator&
+                                mainGraphIterator)
 {
-  EList slice;
+  //Starting from a point in the model, find if any of the connecting edges
+  //straddle the x-z clipping plane
+  //1. For the key value in the outer map, iterate through the inner map.
+  //2. Check each edge that is formed to see if one of the vertices is above the
+  //   x-z clipping plane and one is below
+  //3. If this is true, call a recursive method to start from this edge and find
+  //   the other edge in the containing triangle that also clips the x-z plane
+  //4. When the recursive method calls have all excited, we have traveled all
+  //   the way around the model and created a cross section.
+  //5. Get the exact coordinates for each point the clips the y-z plane and
+  //   store it
+
+  vector<std::pair<int, int>> slice;
   int firstEdgeVertexIndex = (*mainGraphIterator).first;
-  IMIter innerMapIterator = (*mainGraphIterator).second.begin();
-  //Go through each of the connecting vertices to see if that staddle the
-  //clipping plane with this vertex
+  map<int, set<int>>::iterator innerMapIterator =
+                    (*mainGraphIterator).second.begin();
   while (innerMapIterator != (*mainGraphIterator).second.end())
   {
     int secondEdgeVertexIndex = (*innerMapIterator).first;
-    double v1Y = vertexData[firstEdgeVertexIndex].y;
-    double v2Y = vertexData[secondEdgeVertexIndex].y;
-    if ((v1Y >= y && v2Y < y) || (v1Y < y && v2Y >= y))
+    double vertex1YValue = vertexData[firstEdgeVertexIndex].y;
+    double vertex2YValue = vertexData[secondEdgeVertexIndex].y;
+    if ((vertex1YValue >= currentYValue && vertex2YValue < currentYValue)
+        || (vertex1YValue < currentYValue && vertex2YValue >= currentYValue))
     {
       //We have found an edge that straddles. From here, walk along the surface
       //of the model, traveling along straddling edges. Eventually, you will
@@ -401,8 +520,7 @@ void Mesh::findStraddlingVertex(GIter& mainGraphIterator)
       if (!slice.empty())
       {
         //Find the exact points in this slices that straddle the clipping plane
-        slicesData.push_back(getSliceVertices(slice));
-        sliceVertexVec.push_back(slice);
+        modelCrossSectionData.push_back(getSliceVertices(slice));
       }
       break;
     }
@@ -410,107 +528,147 @@ void Mesh::findStraddlingVertex(GIter& mainGraphIterator)
   }
 }
 
-void Mesh::clipAlongYPlane(EList& slice, int edgeVertex1, int edgeVertex2)
+void Mesh::clipAlongYPlane(vector<std::pair<int, int>>& slice,
+                           int currentEdgeVertex1, int currentEdgeVertex2)
 {
-  //This is a recursive helper function for finding straddling edges in the
-  //model.
-  //We will never travel to a triangle twice. If we return to a triangle, we
-  //will know that we are done
-  TriSet triangleThatContainEdge = graph[edgeVertex1][edgeVertex2];
+  //Recursive helper for finding edges in the model that straddle the x-z plane
+  //1. Get the triangle set that contains all of the triangles that contain this
+  //   current edge
+  //2. If no triangles could be found, then we have erased them all because we
+  //   have already visited all of them on this slice. Exit the method
+  //3. Otherwise, save the vertices in the slice
+  //4. Choose a triangle from the previously mentioned set.
+  //5. Call a method to find the other edge in that triangle that straddles the
+  //   x-z clipping plane
+  //6. Recursively call this method using THAT edge that you have now traveled
+  //   to, building the slice as you go
+
+  set<int> triangleThatContainEdge =
+    graph[currentEdgeVertex1][currentEdgeVertex2];
   if (triangleThatContainEdge.size() == 0)
   {
     //We have returned to the start. Exit.
     return;
   }
   //Save this edge in the slice
-  slice.push_back(make_pair(edgeVertex1, edgeVertex2));
+  slice.push_back(make_pair(currentEdgeVertex1, currentEdgeVertex2));
   //Find a triangle that contains this edge
-  int t = *triangleThatContainEdge.begin();
+  int triangle = *triangleThatContainEdge.begin();
   int nextEdgeVertex1, nextEdgeVertex2;
   //Find the other two edges that are in that triangle. One of them WILL
   //straddle the clipping plane
-  nextSliceEdge(edgeVertex1, edgeVertex2, nextEdgeVertex1, nextEdgeVertex2, t);
+  nextSliceEdge(currentEdgeVertex1, currentEdgeVertex2, nextEdgeVertex1,
+                nextEdgeVertex2, triangle);
   //Call the function recursively on THAT edge
   clipAlongYPlane(slice, nextEdgeVertex1, nextEdgeVertex2);
   return;
 }
 
-void Mesh::nextSliceEdge(int eV1, int eV2, int& nxtEV1, int& nxtEV2, int t)
+void Mesh::nextSliceEdge(int currentEdgeVertex1, int currentEdgeVertex2,
+                         int& nextEdgeVertex1, int& nextEdgeVertex2, int triangle)
 {
-  //Remove the triangle from consideration so we don't return to it
-  graph[triangleIndices[t]][triangleIndices[t + 1]].erase(t);
-  graph[triangleIndices[t]][triangleIndices[t + 2]].erase(t);
-  graph[triangleIndices[t + 1]][triangleIndices[t]].erase(t);
-  graph[triangleIndices[t + 1]][triangleIndices[t + 2]].erase(t);
-  graph[triangleIndices[t + 2]][triangleIndices[t]].erase(t);
-  graph[triangleIndices[t + 2]][triangleIndices[t + 1]].erase(t);
+  //Find the next edge in a triangle to travel to
+  //1. Erase the triangle we are in from the graph so we don't travel to it
+  //   again during the creation of this slice
+  //2. Check all of the other edges in this triangle to see which one also
+  //   straddles the x-z clipping plane
+  //3. Once the other straddling edge has been find, return by reference the
+  //   vertices in this edge
+
+  graph[triangleIndices[triangle]][triangleIndices[triangle + 1]].erase(triangle);
+  graph[triangleIndices[triangle]][triangleIndices[triangle + 2]].erase(triangle);
+  graph[triangleIndices[triangle + 1]][triangleIndices[triangle]].erase(triangle);
+  graph[triangleIndices[triangle + 1]][triangleIndices[triangle + 2]].erase(
+    triangle);
+  graph[triangleIndices[triangle + 2]][triangleIndices[triangle]].erase(triangle);
+  graph[triangleIndices[triangle + 2]][triangleIndices[triangle + 1]].erase(
+    triangle);
   //Find the other edge (that isn't this one) that also straddles the clipping
   //plane
-  if (triangleIndices[t] != eV1 && triangleIndices[t] != eV2)
+  if (triangleIndices[triangle] != currentEdgeVertex1
+      && triangleIndices[triangle] != currentEdgeVertex2)
   {
-    nxtEV2 = triangleIndices[t];
-    double nxtEV2y = vertexData[nxtEV2].y;
-    double eV1y = vertexData[eV1].y;
-    if ((nxtEV2y >= y && eV1y < y) || (nxtEV2y < y && eV1y >= y))
+    nextEdgeVertex2 = triangleIndices[triangle];
+    double nxtEV2y = vertexData[nextEdgeVertex2].y;
+    double eV1y = vertexData[currentEdgeVertex1].y;
+    if ((nxtEV2y >= currentYValue && eV1y < currentYValue)
+        || (nxtEV2y < currentYValue && eV1y >= currentYValue))
     {
-      nxtEV1 = eV1;
+      nextEdgeVertex1 = currentEdgeVertex1;
     }
     else
     {
-      nxtEV1 = eV2;
+      nextEdgeVertex1 = currentEdgeVertex2;
     }
     return;
   }
-  if (triangleIndices[t + 1] != eV1 && triangleIndices[t + 1] != eV2)
+  if (triangleIndices[triangle + 1] != currentEdgeVertex1
+      && triangleIndices[triangle + 1] != currentEdgeVertex2)
   {
-    nxtEV2 = triangleIndices[t + 1];
-    double nxtEV2y = vertexData[nxtEV2].y;
-    double eV1y = vertexData[eV1].y;
-    if ((nxtEV2y >= y && eV1y < y) || (nxtEV2y < y && eV1y >= y))
+    nextEdgeVertex2 = triangleIndices[triangle + 1];
+    double nxtEV2y = vertexData[nextEdgeVertex2].y;
+    double eV1y = vertexData[currentEdgeVertex1].y;
+    if ((nxtEV2y >= currentYValue && eV1y < currentYValue)
+        || (nxtEV2y < currentYValue && eV1y >= currentYValue))
     {
-      nxtEV1 = eV1;
+      nextEdgeVertex1 = currentEdgeVertex1;
     }
     else
     {
-      nxtEV1 = eV2;
+      nextEdgeVertex1 = currentEdgeVertex2;
     }
     return;
   }
-  if (triangleIndices[t + 2] != eV1 && triangleIndices[t + 2] != eV2)
+  if (triangleIndices[triangle + 2] != currentEdgeVertex1
+      && triangleIndices[triangle + 2] != currentEdgeVertex2)
   {
-    nxtEV2 = triangleIndices[t + 2];
-    double nxtEV2y = vertexData[nxtEV2].y;
-    double eV1y = vertexData[eV1].y;
-    if ((nxtEV2y >= y && eV1y < y) || (nxtEV2y < y && eV1y >= y))
+    nextEdgeVertex2 = triangleIndices[triangle + 2];
+    double nxtEV2y = vertexData[nextEdgeVertex2].y;
+    double eV1y = vertexData[currentEdgeVertex1].y;
+    if ((nxtEV2y >= currentYValue && eV1y < currentYValue)
+        || (nxtEV2y < currentYValue && eV1y >= currentYValue))
     {
-      nxtEV1 = eV1;
+      nextEdgeVertex1 = currentEdgeVertex1;
     }
     else
     {
-      nxtEV1 = eV2;
+      nextEdgeVertex1 = currentEdgeVertex2;
     }
     return;
   }
 }
 
-vector<VAttrs> Mesh::getSliceVertices(EList& slice)
+vector<Object::VertexAttributes> Mesh::getSliceVertices(
+  vector<std::pair<int, int>>& slice)
 {
-  //Given a list of vertex indices, get all of the coordinates for each vertex
-  //and return them in a vector
-  vector<VAttrs>sliceData;
-  EIter sliceIter = slice.begin();
+  //Now that we have the edges straddle the clipping plane, find the exact
+  //points that these edges clip the plane. This will form the slice
+  //1. Iterate through all of the edges. Get the vertices for each endpoint
+  //2. Find the x, y, and z disances of the first endpoint from the second
+  //   endpoint
+  //3. Find the y difference of the first endpoint from the x-z clipping plane
+  //4. Find the ration of the y distance between the two endpoints and the y
+  //   distances from the first endpoint and the x-z clipping plane
+  //5. Take the vector between the two endpoints and multiply it by this ratio
+  //   to get the exact clipping point on the x-z plane.
+  //6. Save the vertex created to the slice
+
+  vector<VertexAttributes>sliceData;
+  vector<std::pair<int, int>>::iterator sliceIter = slice.begin();
   while (sliceIter != slice.end())
   {
-    VAttrs v1 = vertexData[(*sliceIter).first];
-    VAttrs v2 = vertexData[(*sliceIter).second];
+    VertexAttributes v1 = vertexData[(*sliceIter).first];
+    VertexAttributes v2 = vertexData[(*sliceIter).second];
     double xDif = v1.x - v2.x;
     double yDif = v1.y - v2.y;
     double zDif = v1.z - v2.z;
-    double yDif2 = v1.y - y;
+    double yDif2 = v1.y - currentYValue;
+    //This is the ratio mentioned above
     double ratio = yDif2 / yDif;
-    VAttrs v3;
+    VertexAttributes v3;
     v3.x = v1.x - (xDif * ratio);
-    v3.y = y;
+    //Be sure not to use a derived value here. Precision errors will result
+    v3.y = currentYValue;
     v3.z = v1.z - (zDif * ratio);
     v3.w = 1;
     sliceData.push_back(v3);
@@ -519,22 +677,31 @@ vector<VAttrs> Mesh::getSliceVertices(EList& slice)
   return sliceData;
 }
 
-void Mesh::cleanGraph(Graph& savedGraph)
+void Mesh::cleanGraph(map<int, map<int, set<int>>>& savedGraph)
 {
-  //Go through the graph and find edges that lie entirely below the current
-  //clipping plane. These edges and vertices can be removed from the graph.
-  GIter mainGraphIterator = savedGraph.begin();
+  //Remove bits from the graph that will no longer be needed
+  //This speeds up the creation of slices as the algorithm progresses
+  //1. Iterate through the outer map in the graph
+  //2. Iterate through each inner map in the graph
+  //3. Check all of the endpoints in the graph. If both endpoints lie below the
+  //   x-z clipping plane, then they cannot possibly be used in another slice.
+  //4. Delete the connecting vertex in the inner map.
+  //5. If, at the end of the inner map ieration, the outermap's key value has
+  //6. no remaining connecting vertices, then delete the outer map key index.
+
+  map<int, map<int, set<int>>>::iterator mainGraphIterator = savedGraph.begin();
   while (mainGraphIterator != savedGraph.end())
   {
     //We have the first vertex in the edge
     double firstVertexYVal = vertexData[(*mainGraphIterator).first].y;
-    IMIter innerMapIterator = (*mainGraphIterator).second.begin();
+    map<int, set<int>>::iterator innerMapIterator =
+                      (*mainGraphIterator).second.begin();
     while (innerMapIterator != (*mainGraphIterator).second.end())
     {
       //We have the second vertex in the edge. Now find if they both are below
       //the y clipping plane
       double secondVertexYVal = vertexData[(*innerMapIterator).first].y;
-      if (firstVertexYVal < y && secondVertexYVal < y)
+      if (firstVertexYVal < currentYValue && secondVertexYVal < currentYValue)
       {
         //Erase the edge
         innerMapIterator = (*mainGraphIterator).second.erase(innerMapIterator);
@@ -558,33 +725,48 @@ void Mesh::cleanGraph(Graph& savedGraph)
 
 void Mesh::computeStabilityModel()
 {
+  //Compute the stability of each point (irrespective of the stability of the
+  //points below it
+  //1. Initialize the lowest slice to have a stability value of 0.
+  //2. Go through each sice, and each point in each slice, and initialize the
+  //   stabilities for each vertex to 0.
+  //3. Create a number of threads equal to the maximum number of concurrently
+  //   running threads on the hardware
+  //4. Divide the vector of slices among the threads, assigning a section of the
+  //   model for that thread to find the stability for.
+  //5. Call the thread function and join the threads when they complete
+
+  bestStabilityModel.clear();
   unsigned int i;
   vector<PointStability>firstSlice;
   PointStability p;
-  p.val = 0.0;
-  p.sliceIndex = 0;
-  p.support1 = -1;
-  p.support2 = -1;
-  for (i = 0; i < slicesData[0].size(); i++)
+  p.stabilityValue = 0.0;
+  p.containingSliceIndex = 0;
+  p.supportingVertex1 = -1;
+  p.supportingVertex2 = -1;
+  for (i = 0; i < modelCrossSectionData[0].size(); i++)
   {
     firstSlice.push_back(p);
   }
-  stabilityVector.push_back(firstSlice);
-  for (i = 1; i < slicesData.size(); i++)
+  bestStabilityModel.push_back(firstSlice);
+  for (i = 1; i < modelCrossSectionData.size(); i++)
   {
     vector<PointStability>stabilitySlice;
-    for (unsigned int j = 0; j < slicesData[i].size(); j++)
+    for (unsigned int j = 0; j < modelCrossSectionData[i].size(); j++)
     {
       PointStability q;
-      q.val = 0.0;
-      q.sliceIndex = -1;
-      q.support1 = -1;
-      q.support2 = -1;
+      q.stabilityValue = 0.0;
+      q.containingSliceIndex = -1;
+      q.supportingVertex1 = -1;
+      q.supportingVertex2 = -1;
       stabilitySlice.push_back(q);
     }
-    stabilityVector.push_back(stabilitySlice);
+    bestStabilityModel.push_back(stabilitySlice);
   }
+  //Number of threads is equal to the number of logical processors on the
+  //running hardware
   static unsigned int maxThreads = thread::hardware_concurrency();
+  cout<<"Running stability computation on "<<maxThreads<<" threads"<<endl;
   if (maxThreads < 1)
   {
     maxThreads = 1;
@@ -594,59 +776,102 @@ void Mesh::computeStabilityModel()
   {
     t.push_back(thread());
   }
-  unsigned int numPerThread = slicesData.size() / maxThreads;
+  unsigned int numPerThread = modelCrossSectionData.size() / maxThreads;
   unsigned int start;
-  unsigned int end;
+  unsigned int end = 0;
+  progressCount.clear();
   for (i = 0; i < maxThreads - 1; i++)
   {
     start = (numPerThread * i);
     end = start + numPerThread;
-    t[i] = thread(&Mesh::stabilityThread, this, start, end);
+    progressCount.push_back(0);
+    t[i] = thread(&Mesh::stabilityThread, this, start, end, i);
   }
   t[maxThreads - 1] = thread(&Mesh::stabilityThread, this, end,
-                             slicesData.size());
+                             modelCrossSectionData.size(), maxThreads-1);
+  progressCount.push_back(0);
+  thread progressTracker = thread(&Mesh::progressThread, this);
   for (i = 0; i < maxThreads; i++)
   {
     t[i].join();
   }
+  progressTracker.join();
 }
 
-void Mesh::stabilityThread(unsigned int start, unsigned int end)
+void Mesh::stabilityThread(unsigned int start, unsigned int end, unsigned int threadID)
 {
+  //For all of the slices that have been assigned to this thread, compute the
+  //stability of each vertex in the slices ignoring whether the vertices below
+  //them are also supported
+  //1. For each slice, find the y value of the slices that are directly below
+  //   slice. There may be more than one slice like this.
+  //2. Get all of the slices with this y value
+  //3. For each point on THIS slice, find the slice that best supports it and
+  //   record the support value
   unsigned int i;
   for (i = start; i < end; i++)
   {
     double closestLowerY = findClosestLowerYValue(i);
-    vector<pair<int, vector<VAttrs>>>lowerSlices;
+    vector<pair<int, vector<VertexAttributes>>>lowerSlices;
     lowSlices(lowerSlices, closestLowerY);
-    for (unsigned int j = 0; j < slicesData[i].size(); j++)
+    for (unsigned int j = 0; j < modelCrossSectionData[i].size(); j++)
     {
-      stabilityVector[i][j] = findBestStability(slicesData[i][j], lowerSlices);
+      bestStabilityModel[i][j] = findBestStability(modelCrossSectionData[i][j],
+                                 lowerSlices);
     }
+    progressCount[threadID]++;
   }
+  //cout<<"Thread "<<threadID+1<<" finished"<<endl;
 }
 
-double Mesh::findClosestLowerYValue(int i)
+void Mesh::progressThread()
 {
-  double closestLowerY = slicesData[i][0].y;
-  for (unsigned int j = 0; j < slicesData.size(); j++)
+  int sliceCount = 0;
+  while(sliceCount<modelCrossSectionData.size())
   {
-    if (closestLowerY == slicesData[i][0].y)
+    sliceCount=0;
+    for(unsigned int i = 0; i < progressCount.size();i++)
     {
-      if (slicesData[j][0].y < slicesData[i][0].y)
+      sliceCount+=progressCount[i];
+    }
+    cout<<sliceCount<<" out of "<<modelCrossSectionData.size()
+          <<" slices completed";
+    cout<<'\r';
+    std::chrono::milliseconds dura( 1000 );
+    std::this_thread::sleep_for( dura );
+  }
+  cout<<endl;
+}
+
+double Mesh::findClosestLowerYValue(int sliceIndex)
+{
+  //Find the y value of the slice that is directly below the slice specified by
+  //sliceIndex
+  //1. Initialize the lower y value to be equal to the y value in this slice
+  //2. Go through each of the lower slices and check the y values of the slices
+  //3. If the y value of that sliceis greater than the current best y value but
+  //   less than the y value of the slice specified by sliceIndex, then update
+  //   the best slice
+  double closestLowerY = modelCrossSectionData[sliceIndex][0].y;
+  for (unsigned int j = 0; j < modelCrossSectionData.size(); j++)
+  {
+    if (closestLowerY == modelCrossSectionData[sliceIndex][0].y)
+    {
+      if (modelCrossSectionData[j][0].y < modelCrossSectionData[sliceIndex][0].y)
       {
-        closestLowerY = slicesData[j][0].y;
+        closestLowerY = modelCrossSectionData[j][0].y;
       }
     }
     else
     {
-      if (slicesData[i][0].y > slicesData[j][0].y)
+      if (modelCrossSectionData[sliceIndex][0].y > modelCrossSectionData[j][0].y)
       {
-        double dif1 = slicesData[i][0].y - slicesData[j][0].y;
-        double dif2 = slicesData[i][0].y - closestLowerY;
+        double dif1 = modelCrossSectionData[sliceIndex][0].y -
+                      modelCrossSectionData[j][0].y;
+        double dif2 = modelCrossSectionData[sliceIndex][0].y - closestLowerY;
         if (dif1 < dif2)
         {
-          closestLowerY = slicesData[j][0].y;
+          closestLowerY = modelCrossSectionData[j][0].y;
         }
       }
     }
@@ -654,37 +879,52 @@ double Mesh::findClosestLowerYValue(int i)
   return closestLowerY;
 }
 
-void Mesh::lowSlices(vector<pair<int, vector<VAttrs>>>& lowSlices, double lowY)
+void Mesh::lowSlices(vector<pair<int, vector<VertexAttributes>>>& lowSlices,
+                     double lowerYValue)
 {
-  for (unsigned int j = 0; j < slicesData.size(); j++)
+  //Retreve a list of all of the slices equal to a specified lower value. These
+  //are all of the slice that are at a y value directly below a given slice
+  for (unsigned int j = 0; j < modelCrossSectionData.size(); j++)
   {
-    if (slicesData[j][0].y == lowY)
+    if (modelCrossSectionData[j][0].y == lowerYValue)
     {
-      lowSlices.push_back(make_pair(j, slicesData[j]));
+      lowSlices.push_back(make_pair(j, modelCrossSectionData[j]));
     }
   }
 }
 
-PointStability Mesh::findBestStability(VAttrs& v, SliceVec& lowerSlices)
+Mesh::PointStability Mesh::findBestStability(VertexAttributes& vertex,
+    vector<pair<int, vector<VertexAttributes>>>& lowerSlices)
 {
+  //Give a vertex and a list of lower slices, find the slice that best supports
+  //the vertex and return the stability
+  //1. Iterate through each of the lower slices.
+  //2. Find all of the edges in the slice and link them in a perimeter.
+  //3. Call clipPoints and countNumToSide to find if the vertex is directly over
+  //   a slice or lies outside its bounds when projected onto the slice
+  //   a. If countNumToSide return an odd value, the vertex lies inside the
+  //      slice below it. Return -1 as the stability
+  //   b. If countNumToSide returns an even value, then the vertex lies outside
+  //      the slice below. Return a positive stability value equal to the
+  //      distance
   PointStability bestStability;
   bool firstAttemptToFindBestStability = true;
   for (unsigned int i = 0; i < lowerSlices.size(); i++)
   {
-    Perimeter slicePerimeter;
+    pair<int, vector<pair<VertexAttributes, VertexAttributes>>> slicePerimeter;
     fillPerimeter(slicePerimeter, lowerSlices[i].second, lowerSlices[i].first);
     vector<double>clippingPoints;
-    clipPoints(slicePerimeter, clippingPoints, v.z);
-    int count = countNumToSide(clippingPoints, v.x);
+    clipPoints(slicePerimeter, clippingPoints, vertex.z);
+    int count = countNumToSide(clippingPoints, vertex.x);
     PointStability distance;
     if (count % 2 != 0)
     {
-      distance = findDistance(v, slicePerimeter);
-      distance.val *= -1;
+      distance = findDistance(vertex, slicePerimeter);
+      distance.stabilityValue = -1.0;
     }
     else
     {
-      distance = findDistance(v, slicePerimeter);
+      distance = findDistance(vertex, slicePerimeter);
     }
     if (firstAttemptToFindBestStability)
     {
@@ -693,7 +933,7 @@ PointStability Mesh::findBestStability(VAttrs& v, SliceVec& lowerSlices)
     }
     else
     {
-      if (bestStability.val > distance.val)
+      if (bestStability.stabilityValue > distance.stabilityValue)
       {
         bestStability = distance;
       }
@@ -702,31 +942,54 @@ PointStability Mesh::findBestStability(VAttrs& v, SliceVec& lowerSlices)
   return bestStability;
 }
 
-void Mesh::fillPerimeter(Perimeter& perim, vector<VAttrs>& lowerSlice, int i)
+void Mesh::fillPerimeter(
+  pair<int, vector<pair<VertexAttributes, VertexAttributes>>>& perimeter,
+  vector<VertexAttributes>& lowerSlice, int supportingSliceIndex)
 {
+  //Given a slice and the index of the slice that supports it, retrieve all of
+  //the vertices in the slice and link them together to form edges.
+  //Also, store in the perimeter the index of the slice that this perimeter
+  //represents
   for (unsigned int k = 0; k < lowerSlice.size() - 1; k++)
   {
-    perim.second.push_back(make_pair(lowerSlice[k], lowerSlice[k + 1]));
+    perimeter.second.push_back(make_pair(lowerSlice[k], lowerSlice[k + 1]));
   }
-  pair<VAttrs, VAttrs>finalEdge;
+  pair<VertexAttributes, VertexAttributes>finalEdge;
   finalEdge = make_pair(lowerSlice[lowerSlice.size() - 1], lowerSlice[0]);
-  perim.second.push_back(finalEdge);
-  perim.first = i;
+  perimeter.second.push_back(finalEdge);
+  perimeter.first = supportingSliceIndex;
 }
 
-void Mesh::clipPoints(Perimeter& perim, vector<double>& clipPoints, double z)
+void Mesh::clipPoints(
+  pair<int, vector<pair<VertexAttributes, VertexAttributes>>>& perimeter,
+  vector<double>& clipPoints, double z)
 {
-  for (unsigned int k = 0; k < perim.second.size(); k++)
+  //This method is used to find if a point likes inside or outside a polygon
+  //(and therefore if a vertex in the model is hanging over the edge or is
+  //supported by the bit below it.
+  //1. Go through each of the edges in the perimeter. Find the z values of each
+  //   endpoint in each edge.
+  //2. If the two z values are on opposite sides of the vertex we are checking,
+  //   find the ratio of distances between the enpoints vs. the distance between
+  //   the second enpoint and the vertex (with respect to the z axis)
+  //3. Apply this ratio to the difference in x values between the two endpoints
+  //   to get an x value that represents a point on the line z=vertex.z where
+  //   an edge on the slice clips that line.
+  //   What you are effectively doing is finding all of the edges in the slice
+  //   that are on either side of the vertex (left or right) and storing their
+  //   positions with respect to the x axis.
+  //4. Once this is done, sort these x values from smallest to largest
+  for (unsigned int k = 0; k < perimeter.second.size(); k++)
   {
-    double firstZ = perim.second[k].first.z;
-    double secondZ = perim.second[k].second.z;
+    double firstZ = perimeter.second[k].first.z;
+    double secondZ = perimeter.second[k].second.z;
     if ((firstZ >= z && secondZ < z) || (firstZ < z && secondZ >= z))
     {
-      double xDif = perim.second[k].first.x - perim.second[k].second.x;
-      double zDif = perim.second[k].first.z - perim.second[k].second.z;
-      double zDif2 = perim.second[k].first.z - z;
+      double xDif = perimeter.second[k].first.x - perimeter.second[k].second.x;
+      double zDif = perimeter.second[k].first.z - perimeter.second[k].second.z;
+      double zDif2 = perimeter.second[k].first.z - z;
       double ratio = zDif2 / zDif;
-      clipPoints.push_back(perim.second[k].first.x - (xDif * ratio));
+      clipPoints.push_back(perimeter.second[k].first.x - (xDif * ratio));
     }
   }
   sort(clipPoints.begin(), clipPoints.end());
@@ -734,6 +997,8 @@ void Mesh::clipPoints(Perimeter& perim, vector<double>& clipPoints, double z)
 
 int Mesh::countNumToSide(vector<double>& clippingPoints, double x)
 {
+  //Given all of the points on the line z=vertex.z, find how many of them are
+  //on one side of the vertex. (clip.x < v.x). Return this number
   int count = 0;
   for (unsigned int k = 0; k < clippingPoints.size(); k++)
   {
@@ -745,8 +1010,76 @@ int Mesh::countNumToSide(vector<double>& clippingPoints, double x)
   return count;
 }
 
-PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
+Mesh::PointStability Mesh::findDistance(VertexAttributes& vertex,
+                                        pair<int, vector<pair<VertexAttributes, VertexAttributes>>>& perimeter)
 {
+  //Find how far inside or outside a polygon a given point lies. The result is
+  //always a positive number
+  //The vertex's closest distance will either have it meet up with an edge or a
+  //vertex in the slice. Start with the edges.
+  //A vertex will be closest to an edge if there exists an edge on the slice
+  //which can be projected out perpendicular to it's slope and have it clip the
+  //vertex within the bounds of that edge. This is what we will test first.
+  //1. Start by initializing a value which will remember exactly which edge the
+  //   vertex was closest to. We will initialize it to slice index -1 and to
+  //   vertices -1 and -1 in that slice.
+  //2. Go though each edge in the slice we are comparing to.
+  //3. Check if the vertex likes ON the edge
+  //   a. Find the slope of this edge (xDirEdge and zDirEdge) as well as the
+  //      slope of the line that is perpendicular to this edge (xDirPerp,
+  //      zDirPerp)
+  //   b. Also find the slope between the edge's first end point and the vertex
+  //   itself.
+  //   c. If these are the same, then check to see if the vertex slies ON the
+  //      edge If it does, set the distance to 0 and record the edge that
+  //      supports this vertex.
+  //   d. If the slopes were not the same, start trying to see if the edge can
+  //      be projected out onto the point
+  //4. Find the length of the edge (mag). Use it to normalize the edge
+  //   (newXEdge, newZEdge). Do the same for the perpendicular vectors(newXP,
+  //    newZP).
+  //5. For each endpoint in the edge, computing the following two values (a1,a2)
+  //   {
+  //     ("X component of normalized edge slope" *
+  //      "Z component of ray from vertex to endpoint")
+  //                        +
+  //     ("Z component of normalized edge slope" *
+  //      "X component of ray from vertex to endpoint")
+  //   }
+  //                        /
+  //   {
+  //     ("X component of normalized perpendicular slope" *
+  //      "X component of normalized edge slope")
+  //                        -
+  //     ("Z component of normalized perpendicular slope" *
+  //      "Z component of normalized edge slope")
+  //   }
+  //6. Also compute the following value for each endpoint (b1,b2)
+  //   {
+  //     "X component of ray from vertex to endpoint" +
+  //     {
+  //       "X component of normalized perpendicular slope *
+  //       The a value computed above
+  //     }
+  //   }
+  //                        /
+  //   "X component of of normalized edge slope"
+  //
+  //7. For both end points, record if both the a value and b value were both
+  //   greater than or equal to 0 OR both less than 0 (but not one or the other)
+  //   (intersect1 and intersect2)
+  //8. If both intersect1 and intersect two are of equal value (both true or
+  //   both false) then return to step 2
+  //9. Otherwise, perform the calculation to find the straightline distance
+  //   along a line perpendicular to the edge to the vertex. Record this
+  //   distance and the edge it involves.
+  //10.Throughout this process, keep track of the smallest distance computed
+  //11.Find the distance from the vertex to the closest corner on the slice by
+  //   by going through each vertex on the slice and finding its straighline
+  //   distance to the vertex in question. Record the smallest distance found
+  //12.Return the smaller of the two pointStabilities (either from an edge or
+  //   from a corner)
+
   double minEdgeDistance;
   double edgeDistance;
   unsigned int k;
@@ -758,17 +1091,17 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
   pair<int, pair<int, int>>lowerEdgeVerts = make_pair(-1, make_pair(-1, -1));
   for (k = 0; k < perimeter.second.size(); k++)
   {
-    VAttrs v1 = perimeter.second[k].first;
-    VAttrs v2 = perimeter.second[k].second;
+    VertexAttributes v1 = perimeter.second[k].first;
+    VertexAttributes v2 = perimeter.second[k].second;
     double xDirEdge = v1.x - v2.x;
     double zDirEdge = v1.z - v2.z;
     double xDirPerp = -zDirEdge;
     double zDirPerp = xDirEdge;
     double edgeSlope = xDirEdge / zDirEdge;
-    double slopeBetweenEdgeFirstAndPt = (v1.x - v.x) / (v1.z - v.z);
+    double slopeBetweenEdgeFirstAndPt = (v1.x - vertex.x) / (v1.z - vertex.z);
     if (slopeBetweenEdgeFirstAndPt == edgeSlope)
     {
-      if ((v1.x - v.x <= xDirEdge) && (v1.z - v.z <= zDirEdge))
+      if ((v1.x - vertex.x <= xDirEdge) && (v1.z - vertex.z <= zDirEdge))
       {
         edgeDistance = 0.0;
         foundAnEdgeDistance = true;
@@ -793,10 +1126,10 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
       double newXP = xDirPerp / mag;
       double newZP = zDirPerp / mag;
       double den = ((newXP * newXEdge) - (newZP * newZEdge));
-      double a1 = (newXEdge * (v1.z - v.z) + newZEdge * (v.x - v1.x)) / den;
-      double b1 = ((v1.x - v.x) + (newXP * a1)) / newXEdge;
-      double a2 = (newXEdge * (v2.z - v.z) + newZEdge * (v.x - v2.x)) / den;
-      double b2 = ((v2.x - v.x) + (newXP * a2)) / newXEdge;
+      double a1 = (newXEdge * (v1.z - vertex.z) + newZEdge * (vertex.x - v1.x)) / den;
+      double b1 = ((v1.x - vertex.x) + (newXP * a1)) / newXEdge;
+      double a2 = (newXEdge * (v2.z - vertex.z) + newZEdge * (vertex.x - v2.x)) / den;
+      double b2 = ((v2.x - vertex.x) + (newXP * a2)) / newXEdge;
       if (a1 >= 0 && b1 >= 0 || a1 < 0 && b1 < 0)
       {
         intersect1 = true;
@@ -816,13 +1149,13 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
         {
           if (a1 >= 0)
           {
-            num = (v2.z * -newXP - newZP * v.x - v.z * -newXP + newZP * v2.x);
+            num = (v2.z * -newXP - newZP * vertex.x - vertex.z * -newXP + newZP * v2.x);
             den = ((-newXEdge * -newZP) + newZEdge * -newXP);
             double c = num / den;
             xPt = v2.x - newXEdge * c;
             zPt = v2.z - newZEdge * c;
-            xDif = v.x - xPt;
-            zDif = v.z - zPt;
+            xDif = vertex.x - xPt;
+            zDif = vertex.z - zPt;
             edgeDistance = sqrt(xDif * xDif + zDif * zDif);
             if (k != perimeter.second.size() - 1)
             {
@@ -832,17 +1165,16 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
             {
               lowerEdgeVerts = make_pair(perimeter.first, make_pair(k, 0));
             }
-            foundAnEdgeDistance = true;
           }
           else
           {
-            num = (v2.z * -newXP + newZP * v.x - v.z * newXP - newZP * v2.x);
+            num = (v2.z * -newXP + newZP * vertex.x - vertex.z * newXP - newZP * v2.x);
             den = ((-newXEdge * newZP) + newZEdge * newXP);
             double c = num / den;
             xPt = v2.x - newXEdge * c;
             zPt = v2.z - newZEdge * c;
-            xDif = v.x - xPt;
-            zDif = v.z - zPt;
+            xDif = vertex.x - xPt;
+            zDif = vertex.z - zPt;
             edgeDistance = sqrt(xDif * xDif + zDif * zDif);
             if (k != perimeter.second.size() - 1)
             {
@@ -852,20 +1184,19 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
             {
               lowerEdgeVerts = make_pair(perimeter.first, make_pair(k, 0));
             }
-            foundAnEdgeDistance = true;
           }
         }
         else
         {
           if (a2 >= 0)
           {
-            num = (v1.z * -newXP - newZP * v.x - v.z * -newXP + newZP * v1.x);
+            num = (v1.z * -newXP - newZP * vertex.x - vertex.z * -newXP + newZP * v1.x);
             den = ((newXEdge * -newZP) - newZEdge * -newXP);
             double c = num / den;
             xPt = v1.x + newXEdge * c;
             zPt = v1.z + newZEdge * c;
-            xDif = v.x - xPt;
-            zDif = v.z - zPt;
+            xDif = vertex.x - xPt;
+            zDif = vertex.z - zPt;
             edgeDistance = sqrt(xDif * xDif + zDif * zDif);
             if (k != perimeter.second.size() - 1)
             {
@@ -875,17 +1206,16 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
             {
               lowerEdgeVerts = make_pair(perimeter.first, make_pair(k, 0));
             }
-            foundAnEdgeDistance = true;
           }
           else
           {
-            num = (v1.z * -newXP + newZP * v.x - v.z * newXP - newZP * v1.x);
+            num = (v1.z * -newXP + newZP * vertex.x - vertex.z * newXP - newZP * v1.x);
             den = ((newXEdge * newZP) - newZEdge * newXP);
             double c = num / den;
             xPt = v1.x + newXEdge * c;
             zPt = v1.z + newZEdge * c;
-            xDif = v.x - xPt;
-            zDif = v.z - zPt;
+            xDif = vertex.x - xPt;
+            zDif = vertex.z - zPt;
             edgeDistance = sqrt(xDif * xDif + zDif * zDif);
             if (k != perimeter.second.size() - 1)
             {
@@ -895,7 +1225,6 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
             {
               lowerEdgeVerts = make_pair(perimeter.first, make_pair(k, 0));
             }
-            foundAnEdgeDistance = true;
           }
         }
       }
@@ -903,6 +1232,7 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
     if (!foundAnEdgeDistance)
     {
       minEdgeDistance = edgeDistance;
+      foundAnEdgeDistance = true;
     }
     else
     {
@@ -912,16 +1242,16 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
       }
     }
   }
-  xDif = perimeter.second[0].first.x - v.x;
-  zDif = perimeter.second[0].first.z - v.z;
+  xDif = perimeter.second[0].first.x - vertex.x;
+  zDif = perimeter.second[0].first.z - vertex.z;
   double pointDistance = sqrt(xDif * xDif + zDif * zDif);
   double dif;
   pair<int, pair<int, int>>lowerPointVerts = make_pair(perimeter.first,
                          make_pair(0, 0));
   for (k = 0; k < perimeter.second.size(); k++)
   {
-    xDif = perimeter.second[k].first.x - v.x;
-    zDif = perimeter.second[k].first.z - v.z;
+    xDif = perimeter.second[k].first.x - vertex.x;
+    zDif = perimeter.second[k].first.z - vertex.z;
     dif = sqrt(xDif * xDif + zDif * zDif);
     if (dif < pointDistance)
     {
@@ -930,29 +1260,30 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
     }
   }
   PointStability p;
+  p.vertexCoordinates = vertex;
   if (!foundAnEdgeDistance)
   {
-    p.val = pointDistance;
-    p.sliceIndex = lowerPointVerts.first;
-    p.support1 = lowerPointVerts.second.first;
-    p.support2 = lowerPointVerts.second.second;
+    p.stabilityValue = pointDistance;
+    p.containingSliceIndex = lowerPointVerts.first;
+    p.supportingVertex1 = lowerPointVerts.second.first;
+    p.supportingVertex2 = lowerPointVerts.second.second;
     return p;
   }
   else
   {
     if (edgeDistance < pointDistance)
     {
-      p.val = edgeDistance;
-      p.sliceIndex = lowerEdgeVerts.first;
-      p.support1 = lowerEdgeVerts.second.first;
-      p.support2 = lowerEdgeVerts.second.second;
+      p.stabilityValue = edgeDistance;
+      p.containingSliceIndex = lowerEdgeVerts.first;
+      p.supportingVertex1 = lowerEdgeVerts.second.first;
+      p.supportingVertex2 = lowerEdgeVerts.second.second;
     }
     else
     {
-      p.val = pointDistance;
-      p.sliceIndex = lowerPointVerts.first;
-      p.support1 = lowerPointVerts.second.first;
-      p.support2 = lowerPointVerts.second.second;
+      p.stabilityValue = pointDistance;
+      p.containingSliceIndex = lowerPointVerts.first;
+      p.supportingVertex1 = lowerPointVerts.second.first;
+      p.supportingVertex2 = lowerPointVerts.second.second;
     }
     return p;
   }
@@ -960,141 +1291,128 @@ PointStability Mesh::findDistance(VAttrs& v, Perimeter& perimeter)
 
 void Mesh::adjustStability()
 {
+  //Adjust the raw stability computed in stability thread to consider whether
+  //a particular vertex is supported by vertices that are also stable.
+  //If a vertex is not stable, then not of the vertices that it supports can be
+  //considered stabled either
+  //Go through each vertex. Find the stability of a the two supporting vertices
+  //for each vertex. If they are less than the stability of the supported
+  //vertex, then the stability of the supported vertex is equal to the smallest
+  //of the stabilities of the two supporting vertices
   unsigned int i, j;
-  for (i = 1; i < slicesData.size(); i++)
+  for (i = 1; i < bestStabilityModel.size(); i++)
   {
-    for (j = 0; j < slicesData[i].size(); j++)
+    for (j = 0; j < bestStabilityModel[i].size(); j++)
     {
-      PointStability pStability = stabilityVector[i][j];
+      PointStability pStability = bestStabilityModel[i][j];
       PointStability lowerStability1 =
-        stabilityVector[pStability.sliceIndex][pStability.support1];
+        bestStabilityModel[pStability.containingSliceIndex][pStability.supportingVertex1];
       PointStability lowerStability2 =
-        stabilityVector[pStability.sliceIndex][pStability.support2];
-      if (lowerStability1.val >= lowerStability2.val)
+        bestStabilityModel[pStability.containingSliceIndex][pStability.supportingVertex2];
+      if (lowerStability1.stabilityValue >= lowerStability2.stabilityValue)
       {
-        if (lowerStability1.val >= pStability.val)
+        if (lowerStability1.stabilityValue >= pStability.stabilityValue)
         {
-          pStability.val = lowerStability1.val;
-          stabilityVector[i][j] = pStability;
+          pStability.stabilityValue = lowerStability1.stabilityValue;
+          bestStabilityModel[i][j] = pStability;
         }
         else
         {
-          stabilityVector[i][j] = pStability;
+          bestStabilityModel[i][j] = pStability;
         }
       }
-      else if (lowerStability2.val >= lowerStability1.val)
+      else if (lowerStability2.stabilityValue >= lowerStability1.stabilityValue)
       {
-        if (lowerStability2.val >= pStability.val)
+        if (lowerStability2.stabilityValue >= pStability.stabilityValue)
         {
-          pStability.val = lowerStability2.val;
-          stabilityVector[i][j] = lowerStability2;
+          pStability.stabilityValue = lowerStability2.stabilityValue;
+          bestStabilityModel[i][j] = lowerStability2;
         }
         else
         {
-          stabilityVector[i][j] = pStability;
+          bestStabilityModel[i][j] = pStability;
         }
       }
     }
   }
+  //stabilityModelsUnderConsideration.push_back(bestStabilityModel);
+  splitIntoSubModels();
 }
 
-void Mesh::printSlices()
+void Mesh::splitIntoSubModels()
 {
-  ofstream outFile("slices.txt");
-  if (outFile.is_open())
+  pairedDownModel.clear();
+  //Pair down the stability Model to only include ACTUAL vertices in the model
+  unsigned int i,j,k;
+  for(i=0;i<vertexData.size();i++)
   {
-    unsigned int i;
-    for (i = 0; i < sliceVertexVec.size(); i++)
+    for(j=0;j<bestStabilityModel.size();j++)
     {
-      outFile << "slice " << i << " y=" << slicesData[i][0].y << endl;
-      for (unsigned int j = 0; j < sliceVertexVec[i].size(); j++)
+      for(k=0;k<bestStabilityModel[j].size();k++)
       {
-        outFile << "vertex1" << sliceVertexVec[i][j].first;
-        outFile << " vertex2" << sliceVertexVec[i][j].second;
-        outFile << " x=" << slicesData[i][j].x;
-        outFile << " z=" << slicesData[i][j].z;
-        outFile << " stability=" << stabilityVector[i][j].val;
-        outFile << " supporting slice=" << stabilityVector[i][j].sliceIndex;
-        outFile << " supporting vertex1=" << stabilityVector[i][j].support1;
-        outFile << " supporting vertex2=" << stabilityVector[i][j].support2;
-        outFile << endl;
+        if(bestStabilityModel[j][k].vertexCoordinates.x == vertexData[i].x &&
+           bestStabilityModel[j][k].vertexCoordinates.y == vertexData[i].y &&
+           bestStabilityModel[j][k].vertexCoordinates.z == vertexData[i].z)
+        {
+          pairedDownModel.push_back(bestStabilityModel[j][k]);
+        }
       }
     }
-    outFile << endl;
-    outFile.close();
   }
-  else
+  stabilityModelsUnderConsideration.push_back(pairedDownModel);
+  //traverse the graph, looking for edges that straddle stable and unstable
+
+}
+
+void Mesh::findBestOrientation(double tolerance)
+{
+  bestStabilityModel.clear();
+  //Considering all 4 stability models, find the most supported vertices given
+  //the provided tolerance
+  int i;
+  unsigned int j, k;
+  double stability[4];
+  for (i = 0; i < 4; i++)
   {
-    cout << "Failed to open stability file for writing" << endl;
+    int greenCount = 0;
+    int totalNumberOfVerts = 0;
+    for (j = 0; j < stabilityModelsUnderConsideration[i].size(); j++)
+    {
+      if(stabilityModelsUnderConsideration[i][j].stabilityValue <= tolerance)
+      {
+        greenCount++;
+      }
+      totalNumberOfVerts++;
+    }
+    stability[i] = (double)greenCount/(double)totalNumberOfVerts;
   }
+  int bestIndex = 0;
+  double bestStability = stability[0];
+  for (i = 1; i < 4; i++)
+  {
+    if (stability[i] > bestStability)
+    {
+      bestStability = stability[i];
+      bestIndex = i;
+    }
+  }
+  pairedDownModel = stabilityModelsUnderConsideration[bestIndex];
 }
 
 Mesh::~Mesh(void)
 {
-  if (VAO != 0)
+  //Nothing to do
+}
+void Mesh::draw(GLint objectColorLocation, double tolerance)
+{
+  //Given the tolerance provided, find the model that has the most stable
+  //vertices. Draw that model.
+  findBestOrientation(tolerance);
+  for (unsigned int i = 0; i < pairedDownModel.size(); i++)
   {
-    glDeleteBuffers(NumBuffers, buffers);
-    glDeleteVertexArrays(1, &VAO);
-  }
-}
-
-void Mesh::setTransform(glm::mat4& obj)
-{
-  transform.push(obj);
-}
-
-glm::mat4 Mesh::getTransform()
-{
-  return transform.top();
-}
-
-void Mesh::clearTransform()
-{
-  transform.pop();
-}
-void Mesh::setName(const string& name)
-{
-  this->name = name;
-}
-void Mesh::setColor(float r, float g, float b)
-{
-  color = glm::vec3(r, g, b);
-}
-glm::vec3 Mesh::getColor()
-{
-  return color;
-}
-
-void Mesh::passToGPU()
-{
-  glBindVertexArray(VAO);
-  glBindBuffer(GL_ARRAY_BUFFER, buffers[VertexBuffer]);
-  size_t sizeOfVBuf = sizeof(VAttrs) * vertexData.size();
-  glBufferData(GL_ARRAY_BUFFER, sizeOfVBuf, &vertexData[0], GL_STATIC_DRAW);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffers[IndexBuffer]);
-  size_t sizeOfTBuf = sizeof(GLuint) * triangleIndices.size();
-  const GLvoid* data = &triangleIndices[0];
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeOfTBuf, data, GL_STATIC_DRAW);
-  glBindBuffer(GL_ARRAY_BUFFER, buffers[VertexBuffer]);
-  glVertexAttribPointer(vPos, 4, GL_FLOAT, 0, sizeof(VAttrs), BUFSET(0));
-  glEnableVertexAttribArray(vPos);
-  glBindVertexArray(0);
-}
-
-void Mesh::draw(GLint objColLoc, double tolerance)
-{
-  for (unsigned int i = 0; i < slicesData.size(); i++)
-  {
-    drawSlice(i, objColLoc, tolerance);
-  }
-}
-
-void Mesh::drawSlice(unsigned int i, GLint objColLoc, double tolerance)
-{
-  for (unsigned j = 0; j < slicesData[i].size(); j++)
-  {
+    //drawSlice(i, objectColorLocation, tolerance);
     glm::vec3 color;
-    if (stabilityVector[i][j].val > tolerance)
+    if (pairedDownModel[i].stabilityValue > tolerance)
     {
       color = glm::vec3(1, 0, 0);
     }
@@ -1102,9 +1420,31 @@ void Mesh::drawSlice(unsigned int i, GLint objColLoc, double tolerance)
     {
       color = glm::vec3(0, 1, 0);
     }
-    glVertexAttrib3fv(objColLoc, glm::value_ptr(color));
+    glVertexAttrib3fv(objectColorLocation, glm::value_ptr(color));
     glBegin(GL_POINTS);
-    VAttrs v = slicesData[i][j];
+    VertexAttributes v = pairedDownModel[i].vertexCoordinates;
+    glVertex3d(v.x, v.y, v.z);
+    glEnd();
+  }
+}
+void Mesh::drawSlice(unsigned int sliceIndex, GLint objectColorLocation,
+                     double tolerance)
+{
+  //Draw each vertex in each slice. Red = unstable. Green = stable
+  for (unsigned j = 0; j < bestStabilityModel[sliceIndex].size(); j++)
+  {
+    glm::vec3 color;
+    if (bestStabilityModel[sliceIndex][j].stabilityValue > tolerance)
+    {
+      color = glm::vec3(1, 0, 0);
+    }
+    else
+    {
+      color = glm::vec3(0, 1, 0);
+    }
+    glVertexAttrib3fv(objectColorLocation, glm::value_ptr(color));
+    glBegin(GL_POINTS);
+    VertexAttributes v = bestStabilityModel[sliceIndex][j].vertexCoordinates;
     glVertex3d(v.x, v.y, v.z);
     glEnd();
   }

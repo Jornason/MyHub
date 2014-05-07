@@ -19,11 +19,13 @@ LIBS += "../lib/freeglut.lib" "../lib/glew32.lib" "../lib/FreeImage.lib"
 SOURCES += \
     View.cpp \
     mesh.cpp \
-    main.cpp
+    main.cpp \
+    object.cpp
 
 HEADERS += \
     View.h \
-    mesh.h
+    mesh.h \
+    object.h
 
 OTHER_FILES += \
     ../../../SharedResources/triangles.frag \
