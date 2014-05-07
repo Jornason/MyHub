@@ -82,9 +82,9 @@ class Mesh : public Object
 
     //These are the average X, Y, and Z values of all of the vertices in the
     //model
-    double averageXValueInModel;
-    double averageYValueInModel;
-    double averageZValueInModel;
+    double averageXVal;
+    double averageYVal;
+    double averageZVal;
 
     //These are the 3 Eigen Vectors (stored by size)
     Vector3d eigenLargest;
@@ -126,7 +126,7 @@ class Mesh : public Object
     //Input: An iterator for the outer map in the graph (we are checking each
     //edge connecting to a particular vertex
     void findStraddlingEdge(map<int, map<int, set<int>>>::iterator&
-                              mainGraphIter);
+                            mainGraphIter);
 
     //Once a clipping edge has been found, this recursive method will walk along
     //the perimeter of the model traveling to the next edge that straddles the
