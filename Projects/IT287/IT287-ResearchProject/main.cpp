@@ -60,15 +60,16 @@ int main(int argc, char* argv[])
 
 void display()
 {
+  //Clear the display and rerender
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
-  //v.initialize(tolerance);
   v.draw(deltaXAngle, deltaYAngle, tolerance, scale);
   glutSwapBuffers();
 }
 
 void resize(int w, int h)
 {
+  //Resize the window and redisplay
   v.resize(w, h);
   glViewport(0, 0, w, h);
   glutPostRedisplay();
@@ -76,16 +77,19 @@ void resize(int w, int h)
 
 void init()
 {
+  //Initialize the display window
   int mj, mn;
   v.getOpenGLVersion(&mj, &mn);
   cout << "OpenGL version supported: " << mj << "." << mn << endl;
   v.getGLSLVersion(&mj, &mn);
   cout << "GLSL version supported: " << mj << "." << mn << endl;
   glClearColor(0, 0, 0, 1);
+  //Specify the mesh to process
   v.filename = "teddybear.obj";
   v.initialize();
 }
 
+//These two methods control clicking and dragging to rotate the model
 void mouseButton(int button, int state, int x, int y)
 {
   if (button == GLUT_LEFT_BUTTON)
@@ -116,6 +120,7 @@ void mouseMove(int x, int y)
   }
 }
 
+//Increase or decrease the tolerance of the model
 void keyboardSpecial(int key, int, int)
 {
   deltaXAngle = 0.0;
@@ -135,6 +140,7 @@ void keyboardSpecial(int key, int, int)
   cout << "tolerance = " << tolerance << endl;
 }
 
+//Zoom in or out
 void mouseWheel(int, int dir, int, int)
 {
   deltaXAngle = 0.0;

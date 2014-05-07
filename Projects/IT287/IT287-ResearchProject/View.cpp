@@ -11,11 +11,11 @@ using namespace std;
 View::View()
 {
   filename = "";
-  name = "";
 }
 
 View::~View()
 {
+  //Delete all objects
   for (unsigned int i = 0; i < objList.size(); i++)
   {
     delete objList[i];
@@ -25,6 +25,8 @@ View::~View()
 
 void View::resize(int w, int h)
 {
+  //Change the dimensions
+  //Set a perspective projection
   WIN_WIDTH = w;
   WIN_HEIGHT = h;
   proj = glm::perspective(60.0f, (float)WIN_WIDTH / WIN_HEIGHT, 0.1f, 10000.0f);
@@ -32,6 +34,10 @@ void View::resize(int w, int h)
 
 void View::initialize()
 {
+  //Clear the object list
+  //Then construct the shaders.
+  //Identify the projection, modelview, and object color
+  //Create a mesh from the file
   for (unsigned int i = 0; i < objList.size(); i++)
   {
     delete objList[i];
@@ -55,12 +61,16 @@ void View::initialize()
 
 void View::draw(float Xangle, float Yangle, double tolerance, double scale)
 {
+  //Wireframe mode
   glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+  //Set the intitial view point
   glm::vec3 pov = glm::vec3(0, 0, 75);
   modelview = glm::lookAt(pov, glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+  //Set the projection
   glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(proj));
   for (unsigned int i = 0; i < objList.size(); i++)
   {
+    //For each object, transform it by the mouse rotation and mouse-wheel scale. Draw the object
     glm::mat4 id = glm::mat4(1.0);
     glm::mat4 transform = objList[i]->getTransform();
     transform = glm::rotate(id, Yangle, glm::vec3(1, 0, 0)) * transform;
